@@ -148,6 +148,44 @@ describe("patch", () => {
     expect(out).toContain("[1] [X](https://x.com)");
     expect(out).toContain("just a body");
   });
+
+  it("rejects plain objects in patch frontmatter and leaves the file untouched (issue #39)", async () => {
+    await kb.writeConcept("/doc.md", { type: "T", description: "orig" }, "body", "add");
+    // The exact corruption shapes observed in the wild.
+    const badShapes = [
+      { __type: "string", __value: "typed placeholder" },
+      {},
+      { homelab: true, proxmox: true },
+      [{ nested: true }],
+      ["ok", { notOk: 1 }],
+    ];
+    for (const value of badShapes) {
+      await expect(
+        kb.patchConcept("/doc.md", { frontmatter: { description: value as unknown } }, "patch")
+      ).rejects.toMatchObject({ code: "INVALID_FRONTMATTER" });
+    }
+    const read = await kb.readConcept("/doc.md");
+    expect(read.frontmatter.description).toBe("orig");
+  });
+
+  it("still merges scalar/list patches and null-deletes keys", async () => {
+    await kb.writeConcept("/doc2.md", { type: "T", title: "Old", tags: ["a"] }, "body", "add");
+    const patched = await kb.patchConcept(
+      "/doc2.md",
+      { frontmatter: { title: null, description: "new line", tags: ["b", "c"], custom: 42 } },
+      "patch"
+    );
+    expect(patched.frontmatter.title).toBeUndefined();
+    expect(patched.frontmatter.description).toBe("new line");
+    expect(patched.frontmatter.tags).toEqual(["b", "c"]);
+    expect(patched.frontmatter.custom).toBe(42);
+  });
+
+  it("rejects plain objects in write_concept frontmatter too (issue #39)", async () => {
+    await expect(
+      kb.writeConcept("/x.md", { type: "T", tags: { a: true } as never }, "body", "add")
+    ).rejects.toMatchObject({ code: "INVALID_FRONTMATTER" });
+  });
 });
 
 describe("search", () => {

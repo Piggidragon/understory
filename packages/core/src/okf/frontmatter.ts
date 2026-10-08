@@ -22,3 +22,20 @@ export function serializeDoc(frontmatter: ConceptFrontmatter, body: string): str
 export function hasNonEmptyType(frontmatter: Record<string, unknown>): boolean {
   return typeof frontmatter.type === "string" && frontmatter.type.trim().length > 0;
 }
+
+/**
+ * True if the value is a plain object (or contains one inside arrays).
+ * Dates count as scalars: js-yaml serializes them as ISO timestamps.
+ */
+export function containsPlainObject(value: unknown): boolean {
+  if (value instanceof Date) return false;
+  if (Array.isArray(value)) return value.some(containsPlainObject);
+  return typeof value === "object" && value !== null;
+}
+
+/** Top-level frontmatter keys whose values contain plain objects (never serializable as OKF scalars/lists). */
+export function findPlainObjectKeys(frontmatter: Record<string, unknown>): string[] {
+  return Object.entries(frontmatter)
+    .filter(([, v]) => containsPlainObject(v))
+    .map(([k]) => k);
+}

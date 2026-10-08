@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import type { KnowledgeBase } from "../okf/index.js";
+import { findPlainObjectKeys } from "../okf/index.js";
 import type { TreeNode } from "../okf/types.js";
 import type { TraceRecorder } from "./trace.js";
 import { recordHotDelete, recordHotWrite } from "./hot-memory.js";
@@ -20,6 +21,29 @@ const frontmatterSchema = z
   })
   .passthrough()
   .describe("YAML frontmatter. Additional producer-defined keys are allowed.");
+
+/**
+ * Per-key frontmatter patch values (merge semantics): the key's expected scalar/list
+ * type, or null to delete the key. Previously this was `z.record(z.unknown())`, which
+ * let models serialize plain objects into YAML frontmatter and corrupt the bundle (#39).
+ */
+export const frontmatterPatchSchema = z
+  .object({
+    type: z.string().min(1).nullable().optional().describe("Concept kind, e.g. 'API Endpoint'"),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional().describe("One-line summary"),
+    resource: z.string().nullable().optional().describe("Canonical URI of the underlying asset"),
+    tags: z.array(z.string()).nullable().optional(),
+  })
+  .passthrough()
+  .refine(
+    (v) => findPlainObjectKeys(v).length === 0,
+    "Frontmatter values must be scalars or arrays of scalars, never plain objects (e.g. pass 'Description text', not { __type: 'string', __value: ... }). Set a key to null to remove it."
+  )
+  .describe(
+    "Frontmatter keys to merge; set a key to null to remove it. Values must be strings, arrays of strings (for tags), or numbers — never objects." +
+      " Producer-defined keys are allowed with the same value restrictions."
+  );
 
 const logSummary = z
   .string()
@@ -106,10 +130,7 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
         "Targeted update of an existing concept: merge frontmatter keys (null deletes a key) and/or replace one top-level '# Section' body section. Prefer this over write_concept for small edits.",
       inputSchema: z.object({
         path: conceptPath,
-        frontmatter: z
-          .record(z.unknown())
-          .optional()
-          .describe("Frontmatter keys to merge; set a key to null to remove it"),
+        frontmatter: frontmatterPatchSchema,
         replace_section: z
           .object({
             heading: z

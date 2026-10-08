@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { parseDoc, serializeDoc, hasNonEmptyType } from "./frontmatter.js";
+import { parseDoc, serializeDoc, hasNonEmptyType, findPlainObjectKeys } from "./frontmatter.js";
 import { RESERVED_FILENAMES } from "./types.js";
 import type { Concept, ConceptFrontmatter, TreeNode } from "./types.js";
 
@@ -108,6 +108,16 @@ export class Bundle {
     if (!hasNonEmptyType(frontmatter)) {
       throw new BundleError(
         `Frontmatter must include a non-empty "type" field (OKF spec §5)`,
+        "INVALID_FRONTMATTER"
+      );
+    }
+    // Plain objects in frontmatter serialize to typed/anonymous YAML structures that
+    // break OKF conformance and crash consumers (e.g. the web UI). Scalars, arrays of
+    // scalars and dates are fine; anything else is a caller bug.
+    const objectKeys = findPlainObjectKeys(frontmatter);
+    if (objectKeys.length > 0) {
+      throw new BundleError(
+        `Frontmatter values must be scalars or arrays of scalars — plain objects would corrupt the file. Offending key(s): ${objectKeys.join(", ")}`,
         "INVALID_FRONTMATTER"
       );
     }
