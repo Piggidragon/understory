@@ -40,3 +40,21 @@ describe("frontmatterPatchSchema (issue #39)", () => {
     expect(frontmatterPatchSchema.safeParse({ type: "T" }).success).toBe(true);
   });
 });
+
+describe("patch_concept input", () => {
+  it("accepts a body-only patch: frontmatter stays optional", async () => {
+    const { buildWriteTools } = await import("../src/agent/tools.js");
+    const { KnowledgeBase } = await import("../src/okf/index.js");
+    const tools = buildWriteTools(new KnowledgeBase("/nonexistent-bundle"), new Set());
+    const schema = tools.patch_concept.inputSchema as unknown as {
+      safeParse: (v: unknown) => { success: boolean };
+    };
+    expect(
+      schema.safeParse({
+        path: "/a.md",
+        replace_section: { heading: "Notes", content: "new" },
+        log_summary: "Updated notes.",
+      }).success
+    ).toBe(true);
+  });
+});

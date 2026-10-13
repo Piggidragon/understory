@@ -1,8 +1,12 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parseDoc, serializeDoc, hasNonEmptyType, findPlainObjectKeys } from "./frontmatter.js";
 import { RESERVED_FILENAMES } from "./types.js";
 import type { Concept, ConceptFrontmatter, TreeNode } from "./types.js";
+
+/** Frontmatter keys the OKF spec defines; each holds a scalar or a list of strings. */
+const STANDARD_KEYS = new Set(["type", "title", "description", "resource", "tags", "timestamp"]);
 
 export class BundleError extends Error {
   constructor(
@@ -114,10 +118,11 @@ export class Bundle {
     // Plain objects in frontmatter serialize to typed/anonymous YAML structures that
     // break OKF conformance and crash consumers (e.g. the web UI). Scalars, arrays of
     // scalars and dates are fine; anything else is a caller bug.
-    const objectKeys = findPlainObjectKeys(frontmatter);
+    const objectKeys = await this.rejectedObjectKeys(canonical, frontmatter);
     if (objectKeys.length > 0) {
       throw new BundleError(
-        `Frontmatter values must be scalars or arrays of scalars — plain objects would corrupt the file. Offending key(s): ${objectKeys.join(", ")}`,
+        `Frontmatter values must be scalars or arrays of scalars, not objects. Offending key(s): ${objectKeys.join(", ")}. ` +
+          `Pass a plain string (or a list of strings for tags), or null to remove the key.`,
         "INVALID_FRONTMATTER"
       );
     }
@@ -129,6 +134,34 @@ export class Bundle {
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, serializeDoc(stamped, body), "utf-8");
     return { path: canonical, frontmatter: stamped, body, raw: serializeDoc(stamped, body) };
+  }
+
+  /**
+   * Frontmatter keys whose object values this write must not save.
+   *
+   * The standard OKF keys are scalars or string lists, so an object there is
+   * always rejected. OKF also lets producers define their own keys, and a
+   * bundle written elsewhere may hold structured ones (`owner: {team: ...}`).
+   * Such a key is kept when it already exists in the file with exactly this
+   * value, so patching or rewriting an imported concept does not destroy
+   * metadata the write never touched. It can be carried forward, but not
+   * created or altered here.
+   */
+  private async rejectedObjectKeys(
+    canonical: string,
+    frontmatter: ConceptFrontmatter
+  ): Promise<string[]> {
+    const objectKeys = findPlainObjectKeys(frontmatter);
+    if (objectKeys.every((key) => STANDARD_KEYS.has(key))) return objectKeys;
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = (await this.readConcept(canonical)).frontmatter;
+    } catch {
+      // New or unreadable file: nothing to carry forward.
+    }
+    return objectKeys.filter(
+      (key) => STANDARD_KEYS.has(key) || !isDeepStrictEqual(existing[key], frontmatter[key])
+    );
   }
 
   /**

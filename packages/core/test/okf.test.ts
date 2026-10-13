@@ -181,6 +181,54 @@ describe("patch", () => {
     expect(patched.frontmatter.custom).toBe(42);
   });
 
+  describe("structured producer-defined keys that already exist (OKF allows them)", () => {
+    const imported =
+      "---\ntype: API Endpoint\ntitle: Billing\nowner:\n  team: payments\n  oncall: pay-oncall\n---\nBody.\n\n# Notes\n\nold\n";
+
+    beforeEach(async () => {
+      await fs.mkdir(path.join(root, "apis"), { recursive: true });
+      await fs.writeFile(path.join(root, "apis/billing.md"), imported);
+    });
+
+    it("are preserved by a patch that does not touch them", async () => {
+      const patched = await kb.patchConcept(
+        "/apis/billing.md",
+        { frontmatter: { description: "Charges" }, replaceSection: { heading: "Notes", content: "new" } },
+        "patch"
+      );
+      expect(patched.frontmatter.owner).toEqual({ team: "payments", oncall: "pay-oncall" });
+      expect(patched.frontmatter.description).toBe("Charges");
+      expect(patched.body).toContain("new");
+    });
+
+    it("are preserved by a full rewrite that carries them forward unchanged", async () => {
+      const existing = await kb.readConcept("/apis/billing.md");
+      const written = await kb.writeConcept("/apis/billing.md", { ...existing.frontmatter, title: "Billing API" }, "Rewritten.", "rewrite");
+      expect(written.frontmatter.owner).toEqual({ team: "payments", oncall: "pay-oncall" });
+    });
+
+    it("cannot be altered into a different object, or introduced on a new concept", async () => {
+      await expect(
+        kb.patchConcept("/apis/billing.md", { frontmatter: { owner: { team: "someone-else" } } }, "patch")
+      ).rejects.toMatchObject({ code: "INVALID_FRONTMATTER" });
+      await expect(
+        kb.writeConcept("/apis/new.md", { type: "T", owner: { team: "x" } }, "body", "add")
+      ).rejects.toMatchObject({ code: "INVALID_FRONTMATTER" });
+      expect((await kb.readConcept("/apis/billing.md")).frontmatter.owner).toEqual({ team: "payments", oncall: "pay-oncall" });
+    });
+
+    it("do not excuse an object in a standard key that is already on disk", async () => {
+      await fs.writeFile(path.join(root, "apis/broken.md"), "---\ntype: T\ndescription: {}\n---\nBody.\n");
+      // A body-only patch must not re-save the broken description...
+      await expect(
+        kb.patchConcept("/apis/broken.md", { replaceBody: "New body." }, "patch")
+      ).rejects.toThrow(/description/);
+      // ...and repairing the key in the same patch goes through.
+      const repaired = await kb.patchConcept("/apis/broken.md", { frontmatter: { description: "Fixed" }, replaceBody: "New body." }, "repair");
+      expect(repaired.frontmatter.description).toBe("Fixed");
+    });
+  });
+
   it("rejects plain objects in write_concept frontmatter too (issue #39)", async () => {
     await expect(
       kb.writeConcept("/x.md", { type: "T", tags: { a: true } as never }, "body", "add")
